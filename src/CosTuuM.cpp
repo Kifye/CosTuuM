@@ -30,6 +30,7 @@
 #include "Matrix.hpp"
 #include "ParameterFile.hpp"
 #include "TMatrixCalculator.hpp"
+#include "Utilities.hpp"
 
 #include <cinttypes>
 #include <cmath>
@@ -44,6 +45,38 @@ using namespace boost::multiprecision;
 using namespace std;
 #endif
 
+template<typename StartType, typename EndType>
+std::vector<EndType> parse_to_typed_array(ParameterFile& params, const std::string& key, const std::vector<StartType>& default_value) {
+    const std::vector<StartType> double_vector =
+      params.get_value<std::vector<StartType>>(key, default_value);
+
+  std::vector<EndType> float_vector(double_vector.size());
+  for (size_t i = 0; i < double_vector.size(); ++i) {
+    float_vector[i] = double_vector[i];
+  }
+
+  return float_vector;
+}
+
+template <Quantity _quantity_>
+std::vector<float_type> parse_phys_to_typed_array(ParameterFile& params, const std::string& key, const std::string& default_str) {
+    std::vector<std::string> parts;
+    std::string value = params.get_value<std::string>(key);
+    Utilities::split_string(value, parts);
+    std::vector<double> double_vector;
+    for (auto& part : parts) {
+        std::pair<double, std::string> valunit = Utilities::split_value(part);
+        double_vector.push_back(
+            UnitConverter::to_SI<_quantity_>(valunit.first, valunit.second));
+    }
+
+  std::vector<float_type> float_vector(double_vector.size());
+  for (size_t i = 0; i < double_vector.size(); ++i) {
+    float_vector[i] = double_vector[i];
+  }
+
+  return float_vector;
+}
 /**
  * @brief Main program entry point.
  *
@@ -68,6 +101,8 @@ int main(int argc, char **argv) {
                     COMMANDLINEOPTION_STRINGARGUMENT, "", true);
   parser.add_option("output", 'o', "Name of the output dump file.",
                     COMMANDLINEOPTION_STRINGARGUMENT, "", true);
+  parser.add_option("tmatrix_type", 't', "The way of obtaining T-matrix: base or spheroidal",
+                      COMMANDLINEOPTION_STRINGARGUMENT, "base", false);
   parser.parse_arguments(argc, argv);
 
   std::cout << "Command line options:" << std::endl;
@@ -76,12 +111,22 @@ int main(int argc, char **argv) {
 
   ParameterFile params(parser.get_value<std::string>("params"));
 
+  bool use_spheroidal = false;
+  if (parser.get_value<std::string>("tmatrix_type")== "spheroidal") {
+    use_spheroidal = true;
+  }
+
   /// input parameters
 
   /// dust particle
   // size of the particle (in same units as the wavelength)
-  const float_type axi = params.get_physical_value<QUANTITY_LENGTH>(
-      "DustParticle:size", "10. micron");
+  const std::vector<float_type> axi = parse_phys_to_typed_array<QUANTITY_LENGTH>(params, "DustParticle:size", "10. micron");
+
+    std::cerr << "read axi = ";
+    for (const auto& item : axi) {
+        std::cerr << item << " ";
+    }
+    std::cerr << "\n";
   // ratio between the equal surface area sphere radius and equal volume sphere
   // radius (is recomputed if not equal to 1)
   float_type ratio_of_radii = 1.;
@@ -90,12 +135,21 @@ int main(int argc, char **argv) {
     ratio_of_radii = 0.1;
   }
   // refractive index
-  const std::complex<float_type> mr = params.get_value<std::complex<double>>(
-      "DustParticle:refractive index", std::complex<double>(1.5, 0.02));
+  const std::vector<std::complex<float_type>> mr = 
+  parse_to_typed_array<std::complex<double>, std::complex<float_type>>(
+    params, "DustParticle:refractive index", std::vector<std::complex<double>>(1, std::complex<double>(1.5, 0.02)));
+    std::cerr << "read mr = ";
+    for (const auto& item : mr) {
+        std::cerr << item << " ";
+    }
+    std::cerr << "\n";
   // ratio of horizontal and vertical axis of the spheroidal particle
-  const float_type axis_ratio =
-      params.get_value<double>("DustParticle:axis ratio", 0.5);
-
+  std::vector<float_type> axis_ratio = parse_to_typed_array<double, float_type>(params, "DustParticle:axis ratio", std::vector<double>{1, 0.5});
+  std::cerr << "read axis_ratio = ";
+    for (const auto& item : axis_ratio) {
+        std::cerr << item << " ";
+    }
+    std::cerr << "\n";
   /// radiation
   // wavelength of incoming radiation (in same units as the particle size)
   const float_type wavelength = params.get_physical_value<QUANTITY_LENGTH>(
@@ -148,14 +202,25 @@ int main(int argc, char **argv) {
     std::cout << std::endl;
   }
 
-  TMatrix *active_Tmatrix = TMatrixCalculator::calculate_TMatrix(
+    const uint_fast32_t nol = axi.size();
+    if (nol != mr.size()) {
+        std::cerr << "wrong size of mr: " << mr.size() << " when expected " << nol;
+        exit(1);
+    }
+        if (nol != axis_ratio.size()) {
+        std::cerr << "wrong size of axis_ratio: " << axis_ratio.size() << " when expected " << nol;
+        exit(1);
+    }
+    
+  TMatrix *active_Tmatrix = TMatrixCalculator::calculate_TMatrix(nol,
       ratio_of_radii, axis_ratio, axi, wavelength, maximum_order, tolerance,
-      ndgs, mr, maximum_ngauss);
+      ndgs, mr, maximum_ngauss, use_spheroidal);
 
-  //  OrientationDistribution distribution(2 * active_Tmatrix->get_nmax());
-  //  TMatrix *average_Tmatrix =
-  //  TMatrixCalculator::apply_orientation_distribution(
-  //        *active_Tmatrix, distribution);
+   OrientationDistribution distribution(2 * active_Tmatrix->get_nmax());
+   distribution.initialise();
+   TMatrix *average_Tmatrix =
+   TMatrixCalculator::apply_orientation_distribution(
+         *active_Tmatrix, distribution);
 
   /// compute a scattering event using the T-matrix
 
@@ -183,10 +248,43 @@ int main(int argc, char **argv) {
   ctm_warning("K[3,:] = %g %g %g %g", double(K(3, 0)), double(K(3, 1)),
               double(K(3, 2)), double(K(3, 3)));
 
+  ctm_warning("Extinction coefficient = %g", double(active_Tmatrix->get_extinction_coefficient()));
+  ctm_warning("Scattering coefficient = %g", double(active_Tmatrix->get_scattering_coefficient()));
+
+  ctm_warning("Extinction cross-section = %g", double(active_Tmatrix->get_extinction_coefficient()));
+  ctm_warning("Scattering cross-section = %g", double(active_Tmatrix->get_scattering_coefficient()));
+
   K.binary_dump(parser.get_value<std::string>("output"));
+
+  Matrix<float_type> Z_tot = average_Tmatrix->get_scattering_matrix(
+      alpha, beta, theta_in, phi_in, theta_out, phi_out);
+
+  ctm_warning("Z_tot[0,:] = %g %g %g %g", double(Z_tot(0, 0)), double(Z_tot(0, 1)),
+              double(Z_tot(0, 2)), double(Z_tot(0, 3)));
+  ctm_warning("Z_tot[1,:] = %g %g %g %g", double(Z_tot(1, 0)), double(Z_tot(1, 1)),
+              double(Z(1, 2)), double(Z(1, 3)));
+  ctm_warning("Z_tot[2,:] = %g %g %g %g", double(Z_tot(2, 0)), double(Z_tot(2, 1)),
+              double(Z_tot(2, 2)), double(Z_tot(2, 3)));
+  ctm_warning("Z_tot[3,:] = %g %g %g %g", double(Z_tot(3, 0)), double(Z_tot(3, 1)),
+              double(Z_tot(3, 2)), double(Z_tot(3, 3)));
+
+  Matrix<float_type> K_tot =
+      average_Tmatrix->get_extinction_matrix(alpha, beta, theta_in, phi_in);
+
+  ctm_warning("K_tot[0,:] = %g %g %g %g", double(K_tot(0, 0)), double(K_tot(0, 1)),
+              double(K_tot(0, 2)), double(K_tot(0, 3)));
+  ctm_warning("K_tot[1,:] = %g %g %g %g", double(K_tot(1, 0)), double(K_tot(1, 1)),
+              double(K_tot(1, 2)), double(K_tot(1, 3)));
+  ctm_warning("K_tot[2,:] = %g %g %g %g", double(K_tot(2, 0)), double(K_tot(2, 1)),
+              double(K_tot(2, 2)), double(K_tot(2, 3)));
+  ctm_warning("K_tot[3,:] = %g %g %g %g", double(K_tot(3, 0)), double(K_tot(3, 1)),
+              double(K_tot(3, 2)), double(K_tot(3, 3)));
+
+  K_tot.binary_dump(parser.get_value<std::string>("output"));
 
   // clean up
   delete active_Tmatrix;
+  delete average_Tmatrix;
 
   // done!
   return 0;

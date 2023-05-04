@@ -51,19 +51,29 @@ message(STATUS
 configure_file(${PROJECT_SOURCE_DIR}/src/DraineDustPropertiesDataLocation.hpp.in
                ${PROJECT_BINARY_DIR}/src/DraineDustPropertiesDataLocation.hpp
                @ONLY)
+set(CMAKE_Fortran_COMPILER "/usr/bin/gfortran-11")
+enable_language(Fortran)
+INCLUDE(FortranCInterface)
+set(CMAKE_Fortran_MODULE_DIRECTORY "/home/odawing/Documents/pulkovo/programs/git/SoMSP/build/modfiles")
 
 set(CosTuuM_SOURCES
     CommandLineOption.cpp
     CommandLineParser.cpp
     CosTuuM.cpp
     ParameterFile.cpp
-
+    tmatrix.F90
     ${PROJECT_BINARY_DIR}/src/CompilerInfo.cpp
     ${PROJECT_BINARY_DIR}/src/ConfigurationInfo.cpp
 )
-
+add_compiler_flag("-lgfortran" REQUIRED)
 add_executable(CosTuuM ${CosTuuM_SOURCES})
 target_link_libraries(CosTuuM ${LIBQUICKSCHED})
+# find_library(GFORTRAN_LIBRARY NAMES libgfortran.so.5)
+# target_link_libraries(CosTuuM ${GFORTRAN_LIBRARY})
+target_link_libraries(CosTuuM gfortran) 
+target_link_libraries(CosTuuM quadmath) 
+target_link_libraries(CosTuuM "/home/odawing/Documents/pulkovo/programs/git/SoMSP/build/libspheroidal_scattering.a")
+
 add_dependencies(CosTuuM CompilerInfo)
 
 if(HAVE_PYTHON)

@@ -55,11 +55,17 @@
 
 #if defined(HAVE_MULTIPRECISION) && defined(HAVE_QUAD_PRECISION)
 #include <boost/multiprecision/cpp_bin_float.hpp>
+#include <boost/multiprecision/float128.hpp>
+#include <boost/multiprecision/complex128.hpp>
 /*! @brief Data type for floating point variables. */
 typedef boost::multiprecision::cpp_bin_float_quad float_type;
+typedef boost::multiprecision::float128 fortran_float_type;
+typedef boost::multiprecision::complex128 fortran_complex_type;
 #else
 /*! @brief Data type for floating point variables. */
 typedef double float_type;
+typedef double fortran_float_type;
+typedef std::complex fortran_complex_type
 #endif
 
 /*! @brief Maximum number of shared memory threads that can be used on this

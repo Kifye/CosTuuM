@@ -97,6 +97,25 @@ inline void split_string(const std::string &value, std::string &str1,
 }
 
 /**
+ * @brief Split a string of the form [str1, str2, str3] into its parts.
+ *
+ * @param value std::string having the form mentioned above.
+ * @param str1 Variable to store the first part in.
+ * @param str2 Variable to store the second part in.
+ * @param str3 Variable to store the third part in.
+ */
+inline void split_string(const std::string &value, std::vector<std::string> &strs) {
+  for (size_t curbegin = value.find('[') + 1; curbegin < value.size(); ) {
+    size_t curend = value.find(',', curbegin);
+      if (curend >= value.size()) {
+      curend = value.find(']', curbegin);
+    }
+    strs.push_back(value.substr(curbegin, curend - curbegin));
+    curbegin = curend + 1;
+  }
+}
+
+/**
  * @brief Convert the given std::string to a given template integer type.
  *
  * We use this version and not strtol, since our version also supports exponent
@@ -227,6 +246,27 @@ template <> inline double convert<double>(const std::string &value) {
               value.c_str());
   }
   return dvalue;
+}
+
+/**
+ * @brief Convert the given string to a double precision floating point value array.
+ *
+ * @param value std::string value.
+ * @return Double precision floating point array stored in the string.
+ */
+template <> inline std::vector<double> convert<std::vector<double>>(const std::string &value) {
+  std::vector<std::string> parts;
+  split_string(value, parts);
+  std::vector<double> result(parts.size());
+  for (size_t i = 0; i < parts.size(); ++i) {
+    char *str_end;
+    result[i] = strtod(parts[i].c_str(), &str_end);
+    if (str_end == value.c_str()) {
+      ctm_error("Error converting \"%s\" to a floating point value!",
+                value.c_str());
+    }
+  }
+  return result;
 }
 
 /**
@@ -411,6 +451,22 @@ convert<std::complex<double>>(const std::string &value) {
 }
 
 /**
+ * @brief Convert the given string to a double precision floating point value complex array.
+ *
+ * @param value std::string value.
+ * @return Double precision floating point complex array stored in the string.
+ */
+template <> inline std::vector<std::complex<double>> convert<std::vector<std::complex<double>>>(const std::string &value) {
+  std::vector<std::string> parts;
+  split_string(value, parts);
+  std::vector<std::complex<double>> result(parts.size());
+  for (size_t i = 0; i < parts.size(); ++i) {
+    result[i] = convert<std::complex<double>>(parts[i]);
+  }
+  return result;
+}
+
+/**
  * @brief Convert the given value to a std::string.
  *
  * @param value Value to convert.
@@ -419,6 +475,26 @@ convert<std::complex<double>>(const std::string &value) {
 template <typename _datatype_> std::string to_string(_datatype_ value) {
   std::stringstream sstream;
   sstream << value;
+  return sstream.str();
+}
+
+/**
+ * @brief Convert the given double array to a std::string.
+ *
+ * @param value Value to convert.
+ * @return std::string.
+ */
+template <> inline std::string to_string(std::vector<double> value) {
+  if (value.empty()) {
+    return "[]";
+  }
+  std::stringstream sstream;
+  sstream << "[";
+  for (size_t i = 0; i + 1 < value.size(); ++i) {
+    sstream << value[i] << ",";
+  }
+  
+  sstream << value.back() << "]";
   return sstream.str();
 }
 
@@ -467,6 +543,26 @@ template <> inline std::string to_string<bool>(bool value) {
 template <> inline std::string to_string(std::complex<double> value) {
   std::stringstream sstream;
   sstream << value.real() << " + " << value.imag() << "i";
+  return sstream.str();
+}
+
+/**
+ * @brief Convert the given complex double array to a std::string.
+ *
+ * @param value Value to convert.
+ * @return std::string.
+ */
+template <> inline std::string to_string(std::vector<std::complex<double>> value) {
+  if (value.empty()) {
+    return "[]";
+  }
+  std::stringstream sstream;
+  sstream << "[";
+  for (size_t i = 0; i + 1 < value.size(); ++i) {
+    sstream << to_string(value[i]) << ",";
+  }
+  
+  sstream << value.back() << "]";
   return sstream.str();
 }
 

@@ -199,9 +199,9 @@ public:
     }
 
     // construct the T-matrix
-    self->_Tmatrix = TMatrixCalculator::calculate_TMatrix(
-        ratio_of_radii, axis_ratio, particle_radius, wavelength, maximum_order,
-        tolerance, ndgs, mr, maximum_ngauss);
+    self->_Tmatrix = TMatrixCalculator::calculate_TMatrix(1,
+        ratio_of_radii, {axis_ratio}, {particle_radius}, wavelength, maximum_order,
+        tolerance, ndgs, {mr}, maximum_ngauss);
 
     // average it out over the orientation distribution
     if (cos2beta >= 0.) {

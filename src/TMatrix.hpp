@@ -32,7 +32,8 @@
 
 #include <complex>
 #include <vector>
-
+#include <iostream>
+#include <cstdio>
 #if defined(HAVE_MULTIPRECISION) && defined(HAVE_QUAD_PRECISION)
 using namespace boost::multiprecision;
 #else
@@ -425,330 +426,36 @@ using namespace std;
  * @f]
  * to get rid of all components for which @f$m\neq{}m'@f$.
  */
+
+extern "C" {
+void __tmatrix_MOD_get_spheroidal_tmatrix(
+        int32_t*,
+        fortran_float_type*,
+        fortran_float_type*,
+        fortran_float_type*,
+        int32_t*,
+        fortran_complex_type*,
+        int32_t*,
+        fortran_complex_type*);
+}
+
 class TMatrix {
-private:
+protected:
   /*! @brief Maximum order of the spherical basis functions, @f$n_{max}@f$. */
   const uint_fast32_t _nmax;
 
-  /*! @brief Number of Gauss-Legendre quadrature points, @f$n_{GL}@f$. */
-  const uint_fast32_t _ngauss;
-
-  /*! @brief Precomputed factors @f$\sqrt{\frac{2n+1}{n(n+1)}}@f$ (array of size
-   *  @f$n_{max}@f$). */
-  std::vector<float_type> _dd;
-
-  /*! @brief Precomputed factors
-   *  @f$\frac{1}{2}\sqrt{\frac{(2n+1)(2n'+1)}{n(n+1)n'(n'+1)}}@f$
-   *  (@f$n_{max}\times{}n_{max}@f$ matrix). */
-  Matrix<float_type> _ann;
-
-  /*! @brief Precomputed factors @f$\cos(\theta{})@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<float_type> _costheta;
-
-  /*! @brief Precomputed factors @f$\frac{1}{\sin(\theta{})}@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<float_type> _sinthetainv;
-
-  /*! @brief Precomputed factors @f$\frac{1}{\sin^2(\theta{})}@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<float_type> _sintheta2inv;
-
-  /*! @brief Gauss-Legendre weights for the roots @f$\cos(\theta{})@f$ (array of
-   *  size @f$2n_{GL}@f$). */
-  std::vector<float_type> _weights;
-
-  /*! @brief Precomputed factors @f$r^2(\theta{})@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<float_type> _r2;
-
-  /*! @brief Precomputed factors @f$\frac{1}{r(\theta{})}\frac{d}{d\theta{}}
-   *  r(\theta{})@f$  (array of size @f$2n_{GL}@f$). */
-  std::vector<float_type> _dr_over_r;
-
-  /*! @brief Precomputed factors @f$kr@f$ (array of size @f$2n_{GL}@f$). */
-  std::vector<float_type> _kr;
-
-  /*! @brief Precomputed factors @f$\frac{1}{kr}@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<float_type> _krinv;
-
-  /*! @brief Precomputed factors @f$km_rr@f$ (array of size @f$2n_{GL}@f$). */
-  std::vector<std::complex<float_type>> _krmr;
-
-  /*! @brief Precomputed factors @f$\frac{1}{km_rr}@f$ (array of size
-   *  @f$2n_{GL}@f$). */
-  std::vector<std::complex<float_type>> _krmrinv;
-
   /*! @brief Wavenumber, @f$k = \frac{2\pi{}}{\lambda{}}@f$. */
   const float_type _k;
-
-  /*! @brief Wavenumber squared, @f$k^2@f$. */
-  const float_type _k2;
-
-  /*! @brief Wavenumber squared times refractive index, @f$m_rk^2@f$. */
-  const std::complex<float_type> _k2mr;
-
-  /*! @brief Bessel functions @f$j_n(kr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
-   *  matrix). */
-  Matrix<float_type> _jkr;
-
-  /*! @brief Bessel functions @f$y_n(kr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
-   *  matrix). */
-  Matrix<float_type> _ykr;
-
-  /*! @brief Bessel function derivatives @f$\frac{[krj_n(kr)]'}{kr}@f$
-   *  (@f$2n_{GL}\times{}n_{max}@f$ matrix). */
-  Matrix<float_type> _djkr;
-
-  /*! @brief Bessel function derivatives @f$\frac{[kry_n(kr)]'}{kr}@f$
-   *  (@f$2n_{GL}\times{}n_{max}@f$ matrix). */
-  Matrix<float_type> _dykr;
-
-  /*! @brief Bessel functions @f$j_n(km_rr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
-   *  matrix). */
-  Matrix<std::complex<float_type>> _jkrmr;
-
-  /*! @brief Bessel function derivatives
-   *  @f$\frac{[km_rrj(km_rr)]'}{km_rr}@f$ (@f$2n_{GL}\times{}n_{max}@f$
-   *  matrix). */
-  Matrix<std::complex<float_type>> _djkrmr;
 
   /*! @brief T-matrix itself. Is in fact a @f$n_{max}+1@f$ element vector for
    *  which every element is a @f$2n_{max}\times{}2n_{max}@f$ matrix. */
   std::vector<Matrix<std::complex<float_type>>> _T;
 
 public:
-  /**
-   * @brief T-matrix.
-   *
-   * @param wavelength Wavelength of incident radiation, @f$\lambda{}@f$.
-   * @param refractive_index Refractive index of the material, @f$m_r@f$.
-   * @param R_V Equal volume sphere radius, @f$R_V@f$.
-   * @param axis_ratio Axis ratio of the spheroid, @f$d = \frac{a}{b}@f$.
-   * @param nmax Maximum order of spherical basis, @f$n_{max}@f$.
-   * @param ngauss Number of Gauss-Legendre quadrature points, @f$n_{GL}@f$.
-   */
-  inline TMatrix(const float_type wavelength,
-                 const std::complex<float_type> refractive_index,
-                 const float_type R_V, const float_type axis_ratio,
-                 const uint_fast32_t nmax, const uint_fast32_t ngauss)
-      : _nmax(nmax), _ngauss(ngauss), _dd(nmax, float_type(0.)),
-        _ann(nmax, nmax), _costheta(2 * ngauss, float_type(0.)),
-        _sinthetainv(2 * ngauss, float_type(0.)),
-        _sintheta2inv(2 * ngauss, float_type(0.)),
-        _weights(2 * ngauss, float_type(0.)), _r2(2 * ngauss, float_type(0.)),
-        _dr_over_r(2 * ngauss, float_type(0.)), _kr(2 * ngauss, float_type(0.)),
-        _krinv(2 * ngauss, float_type(0.)), _krmr(2 * ngauss, float_type(0.)),
-        _krmrinv(2 * ngauss, float_type(0.)), _k(2. * M_PI / wavelength),
-        _k2(_k * _k), _k2mr(refractive_index * _k2), _jkr(2 * ngauss, nmax),
-        _ykr(2 * ngauss, nmax), _djkr(2 * ngauss, nmax),
-        _dykr(2 * ngauss, nmax), _jkrmr(2 * ngauss, nmax),
-        _djkrmr(2 * ngauss, nmax) {
+  virtual ~TMatrix() {}
 
-    _T.reserve(_nmax + 1);
-    for (uint_fast32_t m = 0; m < _nmax + 1; ++m) {
-      const uint_fast32_t nm = _nmax + 1 - m;
-      _T.push_back(Matrix<std::complex<float_type>>(2 * nm, 2 * nm));
-    }
-
-    for (uint_fast32_t ni = 0; ni < nmax; ++ni) {
-      const float_type nn((ni + 2.) * (ni + 1.));
-      const float_type d = sqrt((2. * (ni + 1.) + 1.) / nn);
-      _dd[ni] = d;
-      for (uint_fast32_t nj = 0; nj < ni + 1; ++nj) {
-        const float_type ddd = 0.5 * d * _dd[nj];
-        _ann(ni, nj) = ddd;
-        _ann(nj, ni) = ddd;
-      }
-    }
-    SpecialFunctions::get_gauss_legendre_points_and_weights(
-        2 * ngauss, _costheta, _weights);
-    for (uint_fast32_t ig = 0; ig < ngauss; ++ig) {
-      const float_type this_sintheta2inv =
-          1. / ((1. - _costheta[ig]) * (1. + _costheta[ig]));
-      _sintheta2inv[ig] = this_sintheta2inv;
-      _sintheta2inv[2 * ngauss - ig - 1] = this_sintheta2inv;
-      const float_type this_sinthetainv = sqrt(this_sintheta2inv);
-      _sinthetainv[ig] = this_sinthetainv;
-      _sinthetainv[2 * ngauss - ig - 1] = this_sinthetainv;
-    }
-    SpecialFunctions::get_r_dr_spheroid(&_costheta[0], _costheta.size(),
-                                        axis_ratio, &_r2[0], &_dr_over_r[0]);
-    const std::complex<float_type> mrinv = float_type(1.) / refractive_index;
-    for (uint_fast32_t i = 0; i < 2 * ngauss; ++i) {
-      _r2[i] *= R_V * R_V;
-      const float_type r = sqrt(_r2[i]);
-      _kr[i] = _k * r;
-      _krmr[i] = refractive_index * _kr[i];
-      _krinv[i] = 1. / _kr[i];
-      _krmrinv[i] = mrinv * _krinv[i];
-    }
-    for (uint_fast32_t ig = 0; ig < 2 * ngauss; ++ig) {
-      SpecialFunctions::spherical_j_jdj_array(nmax, _kr[ig], _jkr.get_row(ig),
-                                              _djkr.get_row(ig));
-      SpecialFunctions::spherical_y_ydy_array(nmax, _kr[ig], _ykr.get_row(ig),
-                                              _dykr.get_row(ig));
-      SpecialFunctions::spherical_j_jdj_array(
-          nmax, _krmr[ig], _jkrmr.get_row(ig), _djkrmr.get_row(ig));
-    }
-
-    const uint_fast32_t nmax2 = 2 * nmax;
-
-    Matrix<float_type> wigner_d(2 * ngauss, nmax);
-    Matrix<float_type> dwigner_d(2 * ngauss, nmax);
-    std::vector<float_type> wr2(ngauss);
-    Matrix<std::complex<float_type>> J12(nmax, nmax);
-    Matrix<std::complex<float_type>> J21(nmax, nmax);
-    Matrix<std::complex<float_type>> RgJ12(nmax, nmax);
-    Matrix<std::complex<float_type>> RgJ21(nmax, nmax);
-    Matrix<std::complex<float_type>> Q(nmax2, nmax2);
-    Matrix<std::complex<float_type>> RgQ(nmax2, nmax2);
-
-    for (uint_fast32_t ig = 1; ig < ngauss + 1; ++ig) {
-      const uint_fast32_t i1 = ngauss + ig;
-      const uint_fast32_t i2 = ngauss - ig + 1;
-      std::vector<float_type> dv1(nmax), dv2(nmax);
-      SpecialFunctions::wigner_dn_0m(_costheta[i1 - 1], nmax, 0, &dv1[0],
-                                     &dv2[0]);
-      int_fast8_t si = 1;
-      for (uint_fast32_t n = 0; n < nmax; ++n) {
-        si = -si;
-        wigner_d(i1 - 1, n) = dv1[n];
-        wigner_d(i2 - 1, n) = si * dv1[n];
-        dwigner_d(i1 - 1, n) = dv2[n];
-        dwigner_d(i2 - 1, n) = -si * dv2[n];
-      }
-    }
-    for (uint_fast32_t ig = 0; ig < ngauss; ++ig) {
-      wr2[ig] = _weights[ig] * _r2[ig];
-    }
-    for (uint_fast32_t n1 = 1; n1 < nmax + 1; ++n1) {
-      // n1 * (n1 + 1)
-      const float_type n1n1p1 = n1 * (n1 + 1.);
-      for (uint_fast32_t n2 = 1; n2 < nmax + 1; ++n2) {
-        // n2 * (n2 + 1)
-        const float_type n2n2p1 = n2 * (n2 + 1.);
-
-        std::complex<float_type> this_J12, this_J21, this_RgJ12, this_RgJ21;
-        // filter out half the components because of symmetry
-        if ((n1 + n2) % 2 == 0) {
-          for (uint_fast32_t ig = 1; ig < ngauss + 1; ++ig) {
-            const float_type wigner_n1 = wigner_d(ig - 1, n1 - 1);
-            const float_type dwigner_n1 = dwigner_d(ig - 1, n1 - 1);
-            const float_type wigner_n2 = wigner_d(ig - 1, n2 - 1);
-            const float_type dwigner_n2 = dwigner_d(ig - 1, n2 - 1);
-
-            const float_type wn1dwn2 = wigner_n1 * dwigner_n2;
-            const float_type dwn1wn2 = dwigner_n1 * wigner_n2;
-            const float_type dwn1dwn2 = dwigner_n1 * dwigner_n2;
-
-            const float_type jkrn1 = _jkr(ig - 1, n1 - 1);
-            const float_type ykrn1 = _ykr(ig - 1, n1 - 1);
-            // spherical Hankel function of the first kind
-            const std::complex<float_type> hkrn1(jkrn1, ykrn1);
-            const float_type djkrn1 = _djkr(ig - 1, n1 - 1);
-            const float_type dykrn1 = _dykr(ig - 1, n1 - 1);
-            const std::complex<float_type> dhkrn1(djkrn1, dykrn1);
-            const std::complex<float_type> jkrmrn2 = _jkrmr(ig - 1, n2 - 1);
-            const std::complex<float_type> djkrmrn2 = _djkrmr(ig - 1, n2 - 1);
-
-            const std::complex<float_type> c1 = jkrmrn2 * jkrn1;
-            const std::complex<float_type> b1 = jkrmrn2 * hkrn1;
-
-            const std::complex<float_type> c2 = jkrmrn2 * djkrn1;
-            const std::complex<float_type> b2 = jkrmrn2 * dhkrn1;
-
-            const float_type krinvi = _krinv[ig - 1];
-            const std::complex<float_type> c3 = krinvi * c1;
-            const std::complex<float_type> b3 = krinvi * b1;
-
-            const std::complex<float_type> c4 = jkrn1 * djkrmrn2;
-            const std::complex<float_type> b4 = hkrn1 * djkrmrn2;
-
-            const std::complex<float_type> krmrinvi = _krmrinv[ig - 1];
-            const std::complex<float_type> c5 = c1 * krmrinvi;
-            const std::complex<float_type> b5 = b1 * krmrinvi;
-
-            const float_type wr2i = wr2[ig - 1];
-            const float_type dr_over_ri = _dr_over_r[ig - 1];
-
-            const float_type f1 = wr2i * dwn1dwn2;
-            const float_type f2 = wr2i * dr_over_ri * n1n1p1 * wn1dwn2;
-            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn2(krmr) *
-            //    ([kr*hn1(kr)]'/kr)
-            // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
-            //    jn2(krmr) * hn1(kr) / kr
-            this_J12 += f1 * b2 + f2 * b3;
-            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn2(krmr) *
-            //    ([kr*jn1(kr)]'/kr)
-            // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
-            //    jn2(krmr) * jn1(kr) / kr
-            this_RgJ12 += f1 * c2 + f2 * c3;
-
-            const float_type f3 = wr2i * dr_over_ri * n2n2p1 * dwn1wn2;
-            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * hn1(kr) *
-            //    ([krmr*jn2(krmr)]'/krmr)
-            // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
-            //    jn2(krmr) * hn1(kr) / krmr
-            this_J21 += f1 * b4 + f3 * b5;
-            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn1(kr) *
-            //    ([krmr*jn2(krmr)]'/krmr)
-            // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
-            //    jn2(krmr) * jn1(kr) / krmr
-            this_RgJ21 += f1 * c4 + f3 * c5;
-          }
-          // prefactor sqrt{(2n1+1)*(2n2+1)/[n1*(n1+1)*n2*(n2+1)]}
-          const float_type an12 = 2. * _ann(n1 - 1, n2 - 1);
-          J12(n1 - 1, n2 - 1) = an12 * this_J12;
-          J21(n1 - 1, n2 - 1) = an12 * this_J21;
-          RgJ12(n1 - 1, n2 - 1) = an12 * this_RgJ12;
-          RgJ21(n1 - 1, n2 - 1) = an12 * this_RgJ21;
-        }
-      }
-    }
-    for (uint_fast32_t n1 = 1; n1 < nmax + 1; ++n1) {
-      const uint_fast32_t k1 = n1;
-      const uint_fast32_t kk1 = k1 + nmax;
-      for (uint_fast32_t n2 = 1; n2 < nmax + 1; ++n2) {
-        const uint_fast32_t k2 = n2;
-        const uint_fast32_t kk2 = k2 + nmax;
-
-        const std::complex<float_type> icompl(0., 1.);
-        // no idea why we multiply with i: completely unnecessary...
-        // (code also works if you leave out the i factor)
-        // sign differences are due to a sign difference between the
-        // implementation and documentation
-        const std::complex<float_type> this_J12 = -icompl * J12(n1 - 1, n2 - 1);
-        const std::complex<float_type> this_RgJ12 =
-            -icompl * RgJ12(n1 - 1, n2 - 1);
-        const std::complex<float_type> this_J21 = icompl * J21(n1 - 1, n2 - 1);
-        const std::complex<float_type> this_RgJ21 =
-            icompl * RgJ21(n1 - 1, n2 - 1);
-
-        Q(k1 - 1, k2 - 1) = _k2mr * this_J21 + _k2 * this_J12;
-        RgQ(k1 - 1, k2 - 1) = _k2mr * this_RgJ21 + _k2 * this_RgJ12;
-
-        Q(kk1 - 1, kk2 - 1) = _k2mr * this_J12 + _k2 * this_J21;
-        RgQ(kk1 - 1, kk2 - 1) = _k2mr * this_RgJ12 + _k2 * this_RgJ21;
-      }
-    }
-
-    // func_TT
-    Q.plu_inverse(nmax2);
-
-    for (uint_fast32_t i = 0; i < nmax; ++i) {
-      for (uint_fast32_t j = 0; j < nmax; ++j) {
-        for (uint_fast32_t k = 0; k < nmax2; ++k) {
-          _T[0](i, j) -= RgQ(i, k) * Q(k, j);
-          _T[0](_nmax + i, j) -= RgQ(nmax + i, k) * Q(k, j);
-          _T[0](i, _nmax + j) -= RgQ(i, k) * Q(k, nmax + j);
-          _T[0](_nmax + i, _nmax + j) -= RgQ(nmax + i, k) * Q(k, nmax + j);
-        }
-      }
-    }
-  }
-
+  inline TMatrix(const uint_fast32_t nmax, const float_type wavelength)
+      : _nmax(nmax), _k(2. * M_PI / wavelength) {}
   /**
    * @brief Get the maximum order in the spherical basis function expansion for
    * this T-matrix.
@@ -760,237 +467,9 @@ public:
   /**
    * @brief Compute the missing elements of the T-matrix.
    */
-  inline void compute_additional_elements() {
-
-    for (uint_fast32_t m = 1; m < _nmax + 1; ++m) {
-
-      const float_type m2 = m * m;
-      const uint_fast32_t nm = _nmax + 1 - m;
-      const uint_fast32_t nm2 = 2 * nm;
-
-      Matrix<float_type> wigner_d(2 * _ngauss, _nmax);
-      Matrix<float_type> dwigner_d(2 * _ngauss, _nmax);
-      std::vector<float_type> wr2(_ngauss);
-      Matrix<std::complex<float_type>> J11(_nmax, _nmax);
-      Matrix<std::complex<float_type>> J12(_nmax, _nmax);
-      Matrix<std::complex<float_type>> J21(_nmax, _nmax);
-      Matrix<std::complex<float_type>> J22(_nmax, _nmax);
-      Matrix<std::complex<float_type>> RgJ11(_nmax, _nmax);
-      Matrix<std::complex<float_type>> RgJ12(_nmax, _nmax);
-      Matrix<std::complex<float_type>> RgJ21(_nmax, _nmax);
-      Matrix<std::complex<float_type>> RgJ22(_nmax, _nmax);
-      Matrix<std::complex<float_type>> Q(nm2, nm2);
-      Matrix<std::complex<float_type>> RgQ(nm2, nm2);
-      std::vector<float_type> ds(_ngauss);
-      std::vector<float_type> dss(_ngauss);
-
-      for (uint_fast32_t ig = 1; ig < _ngauss + 1; ++ig) {
-        const uint_fast32_t i1 = _ngauss + ig;
-        const uint_fast32_t i2 = _ngauss + 1 - ig;
-        std::vector<float_type> dv1(_nmax), dv2(_nmax);
-        SpecialFunctions::wigner_dn_0m(_costheta[i1 - 1], _nmax, m, &dv1[0],
-                                       &dv2[0]);
-        int_fast8_t sign = 1;
-        for (uint_fast32_t n = 0; n < _nmax; ++n) {
-          sign = -sign;
-          wigner_d(i1 - 1, n) = dv1[n];
-          wigner_d(i2 - 1, n) = sign * dv1[n];
-          dwigner_d(i1 - 1, n) = dv2[n];
-          dwigner_d(i2 - 1, n) = -sign * dv2[n];
-        }
-      }
-      for (uint_fast32_t ig = 0; ig < _ngauss; ++ig) {
-        // move to class member
-        wr2[ig] = _weights[ig] * _r2[ig];
-        ds[ig] = _sinthetainv[ig] * m * wr2[ig];
-        dss[ig] = _sintheta2inv[ig] * m2;
-      }
-      for (uint_fast32_t n1 = m; n1 < _nmax + 1; ++n1) {
-        // n1 * (n1 + 1)
-        const float_type n1n1p1 = n1 * (n1 + 1.);
-        for (uint_fast32_t n2 = m; n2 < _nmax + 1; ++n2) {
-          // n2 * (n2 + 1)
-          const float_type n2n2p1 = n2 * (n2 + 1.);
-
-          std::complex<float_type> this_J11, this_J12, this_J21, this_J22,
-              this_RgJ11, this_RgJ12, this_RgJ21, this_RgJ22;
-          const int_fast8_t si = ((n1 + n2) % 2 == 0) ? 1 : -1;
-          for (uint_fast32_t ig = 0; ig < _ngauss; ++ig) {
-            const float_type wigner_n1 = wigner_d(ig, n1 - 1);
-            const float_type dwigner_n1 = dwigner_d(ig, n1 - 1);
-            const float_type wigner_n2 = wigner_d(ig, n2 - 1);
-            const float_type dwigner_n2 = dwigner_d(ig, n2 - 1);
-
-            const float_type wn1wn2 = wigner_n1 * wigner_n2;
-            const float_type wn1dwn2 = wigner_n1 * dwigner_n2;
-            const float_type dwn1wn2 = dwigner_n1 * wigner_n2;
-
-            const float_type jkrn1 = _jkr(ig, n1 - 1);
-            const float_type ykrn1 = _ykr(ig, n1 - 1);
-            // spherical Hankel function of the first kind
-            const std::complex<float_type> hkrn1(jkrn1, ykrn1);
-            const float_type djkrn1 = _djkr(ig, n1 - 1);
-            const float_type dykrn1 = _dykr(ig, n1 - 1);
-            const std::complex<float_type> dhkrn1(djkrn1, dykrn1);
-            const std::complex<float_type> jkrmrn2 = _jkrmr(ig, n2 - 1);
-            const std::complex<float_type> djkrmrn2 = _djkrmr(ig, n2 - 1);
-
-            const std::complex<float_type> c1 = jkrmrn2 * jkrn1;
-            const std::complex<float_type> b1 = jkrmrn2 * hkrn1;
-
-            const std::complex<float_type> c2 = jkrmrn2 * djkrn1;
-            const std::complex<float_type> b2 = jkrmrn2 * dhkrn1;
-
-            const float_type krinvi = _krinv[ig];
-
-            const std::complex<float_type> c4 = djkrmrn2 * jkrn1;
-            const std::complex<float_type> b4 = djkrmrn2 * hkrn1;
-
-            const std::complex<float_type> krmrinvi = _krmrinv[ig];
-
-            const float_type dr_over_ri = _dr_over_r[ig];
-
-            if (si < 0) {
-              const float_type dsi = ds[ig];
-
-              const std::complex<float_type> c6 = djkrmrn2 * djkrn1;
-              const std::complex<float_type> b6 = djkrmrn2 * dhkrn1;
-
-              const std::complex<float_type> c7 = c4 * krinvi;
-              const std::complex<float_type> b7 = b4 * krinvi;
-
-              const std::complex<float_type> c8 = c2 * krmrinvi;
-              const std::complex<float_type> b8 = b2 * krmrinvi;
-
-              const float_type e1 = dsi * (wn1dwn2 + dwn1wn2);
-              // (m / sintheta) * jn2(krmr) * hn1(kr) *
-              // (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
-              this_J11 += e1 * b1;
-              // (m / sintheta) * jn2(krmr) * jn1(kr) *
-              // (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
-              this_RgJ11 += e1 * c1;
-
-              const float_type factor = dsi * dr_over_ri * wn1wn2;
-              const float_type e2 = factor * n1n1p1;
-              const float_type e3 = factor * n2n2p1;
-              // (m / sintheta) * ([krmr*kn2(krmr)]'/krmr) * ([kr*hn1(kr)]'/kr)
-              //    * (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
-              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n1 * (n1 + 1)
-              //    * ([krmr*jn2(krmr)]'/krmr) * hn1(kr) / kr
-              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n2 * (n2 + 1)
-              //    * jn2(krmr) * ([kr*hn1(kr]'/kr) / krmr
-              this_J22 += e1 * b6 + e2 * b7 + e3 * b8;
-              // (m / sintheta) * ([krmr*kn2(krmr)]'/krmr) * ([kr*jn1(kr)]'/kr)
-              //    * (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
-              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n1 * (n1 + 1)
-              //    * ([krmr*jn2(krmr)]'/krmr) * jn1(kr) / kr
-              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n2 * (n2 + 1)
-              //    * jn2(krmr) * ([kr*jn1(kr]'/kr) / krmr
-              this_RgJ22 += e1 * c6 + e2 * c7 + e3 * c8;
-            } else {
-              const float_type wr2i = wr2[ig];
-              const std::complex<float_type> c3 = krinvi * c1;
-              const std::complex<float_type> b3 = krinvi * b1;
-              const std::complex<float_type> c5 = c1 * krmrinvi;
-              const std::complex<float_type> b5 = b1 * krmrinvi;
-
-              const float_type f1 =
-                  wr2i * (wn1wn2 * dss[ig] + dwigner_n1 * dwigner_n2);
-              const float_type f2 = wr2i * dr_over_ri * n1n1p1 * wn1dwn2;
-              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
-              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn2(krmr) *
-              //    ([kr*hn1(kr)]'/kr)
-              // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
-              //    jn2(krmr) * hn1(kr) / kr
-              this_J12 += f1 * b2 + f2 * b3;
-              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
-              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn2(krmr) *
-              //    ([kr*jn1(kr)]'/kr)
-              // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
-              //    jn2(krmr) * jn1(kr) / kr
-              this_RgJ12 += f1 * c2 + f2 * c3;
-
-              const float_type f3 = wr2i * dr_over_ri * n2n2p1 * dwn1wn2;
-              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
-              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * hn1(kr) *
-              //    ([krmr*jn2(krmr)]'/krmr)
-              // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
-              //    jn2(krmr) * hn1(kr) / krmr
-              this_J21 += f1 * b4 + f3 * b5;
-              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
-              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn1(kr) *
-              //    ([krmr*jn2(krmr)]'/krmr)
-              // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
-              //    jn2(krmr) * jn1(kr) / krmr
-              this_RgJ21 += f1 * c4 + f3 * c5;
-            }
-          }
-          // prefactor sqrt{(2n1+1)*(2n2+1)/[n1*(n1+1)*n2*(n2+1)]}
-          const float_type an12 = 2. * _ann(n1 - 1, n2 - 1);
-          J11(n1 - 1, n2 - 1) = this_J11 * an12;
-          J12(n1 - 1, n2 - 1) = this_J12 * an12;
-          J21(n1 - 1, n2 - 1) = this_J21 * an12;
-          J22(n1 - 1, n2 - 1) = this_J22 * an12;
-          RgJ11(n1 - 1, n2 - 1) = this_RgJ11 * an12;
-          RgJ12(n1 - 1, n2 - 1) = this_RgJ12 * an12;
-          RgJ21(n1 - 1, n2 - 1) = this_RgJ21 * an12;
-          RgJ22(n1 - 1, n2 - 1) = this_RgJ22 * an12;
-        }
-      }
-      for (uint_fast32_t n1 = m; n1 < _nmax + 1; ++n1) {
-        const uint_fast32_t k1 = n1 + 1 - m;
-        const uint_fast32_t kk1 = k1 + nm;
-        for (uint_fast32_t n2 = m; n2 < _nmax + 1; ++n2) {
-          const uint_fast32_t k2 = n2 + 1 - m;
-          const uint_fast32_t kk2 = k2 + nm;
-
-          const std::complex<float_type> icompl(0., 1.);
-          // a factor -i is missing in J11 and J22
-          // to compensate for this, we multiply J12 and J21 with -i too
-          // we then multiply J11 and J22 with -1, so that it is wrong again?
-          // not sure how to make sense of this...
-          const std::complex<float_type> this_J11 = -J11(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_RgJ11 = -RgJ11(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_J12 =
-              -icompl * J12(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_RgJ12 =
-              -icompl * RgJ12(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_J21 =
-              icompl * J21(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_RgJ21 =
-              icompl * RgJ21(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_J22 = -J22(n1 - 1, n2 - 1);
-          const std::complex<float_type> this_RgJ22 = -RgJ22(n1 - 1, n2 - 1);
-
-          Q(k1 - 1, k2 - 1) = _k2mr * this_J21 + _k2 * this_J12;
-          RgQ(k1 - 1, k2 - 1) = _k2mr * this_RgJ21 + _k2 * this_RgJ12;
-
-          Q(k1 - 1, kk2 - 1) = _k2mr * this_J11 + _k2 * this_J22;
-          RgQ(k1 - 1, kk2 - 1) = _k2mr * this_RgJ11 + _k2 * this_RgJ22;
-
-          Q(kk1 - 1, k2 - 1) = _k2mr * this_J22 + _k2 * this_J11;
-          RgQ(kk1 - 1, k2 - 1) = _k2mr * this_RgJ22 + _k2 * this_RgJ11;
-
-          Q(kk1 - 1, kk2 - 1) = _k2mr * this_J12 + _k2 * this_J21;
-          RgQ(kk1 - 1, kk2 - 1) = _k2mr * this_RgJ12 + _k2 * this_RgJ21;
-        }
-      }
-
-      Q.plu_inverse(nm2);
-
-      for (uint_fast32_t i = 0; i < nm; ++i) {
-        for (uint_fast32_t j = 0; j < nm; ++j) {
-          for (uint_fast32_t k = 0; k < nm2; ++k) {
-            _T[m](i, j) -= RgQ(i, k) * Q(k, j);
-            _T[m](nm + i, j) -= RgQ(nm + i, k) * Q(k, j);
-            _T[m](i, nm + j) -= RgQ(i, k) * Q(k, nm + j);
-            _T[m](nm + i, nm + j) -= RgQ(nm + i, k) * Q(k, nm + j);
-          }
-        }
-      }
-    }
-  }
-
+  inline virtual void compute_additional_elements()  {
+    std::cout << "Shoildn't be called!\n";
+  };
   /**
    * @brief Get a specific element of the T-matrix.
    *
@@ -1041,6 +520,8 @@ public:
       const uint_fast32_t nm = _nmax + 1 - m1;
       return _T[m1](i1 * nm + n1 - m1, i2 * nm + n2 - m2);
     } else {
+      // (1, n, m, 1, nn, m)
+      // (1 * _nmax + n - m - 1, 1 * _nmax + nn - m - 1)
       return _T[m1](i1 * _nmax + n1 - m1 - 1, i2 * _nmax + n2 - m2 - 1);
     }
   }
@@ -1183,12 +664,22 @@ public:
           // in all cases)
           const std::complex<float_type> T11nmnnm = T(0, n, m, 0, nn, m);
           const std::complex<float_type> T22nmnnm = T(1, n, m, 1, nn, m);
+          // std::cout << "n = " << n << " nn = " << nn << " m = " << m << " T22nmnnm = " << T22nmnnm << "\n";
           // if m=0, the T12 and T21 matrices are trivially zero, and we can
           // simplify the expression for S
           if (m == 0) {
             const std::complex<float_type> factor = c_nnn * tau_n * tau_nn;
             S(0, 0) += factor * T22nmnnm;
             S(1, 1) += factor * T11nmnnm;
+      //       std::cout << "iteration S0: m = " << m << " nn = " << nn << " n = " << n << "\n";
+      //     printf("S11: %g + i%g\n", double(S(0, 0).real()),
+      //              double(S(0, 0).imag()));
+      //  printf("S12: %g + i%g\n", double(S(0, 1).real()),
+      //              double(S(0, 1).imag()));
+      //  printf("S21: %g + i%g\n", double(S(1, 0).real()),
+      //              double(S(1, 0).imag()));
+      //  printf("S22: %g + i%g\n", double(S(1, 1).real()),
+      //              double(S(1, 1).imag()));
           } else {
             // in the general case m=/=0, we also need the T12 and T21 elements
             // for this m, n and n'
@@ -1215,11 +706,31 @@ public:
             S(1, 1) += real_factor * (T11nmnnm * tau_tau + T21nmnnm * pi_tau +
                                       T12nmnnm * tau_pi + T22nmnnm * pi_pi);
           }
+
+      //     std::cout << "iteration S: m = " << m << " nn = " << nn << " n = " << n << "\n";
+      //     printf("S11: %g + i%g\n", double(S(0, 0).real()),
+      //              double(S(0, 0).imag()));
+      //  printf("S12: %g + i%g\n", double(S(0, 1).real()),
+      //              double(S(0, 1).imag()));
+      //  printf("S21: %g + i%g\n", double(S(1, 0).real()),
+      //              double(S(1, 0).imag()));
+      //  printf("S22: %g + i%g\n", double(S(1, 1).real()),
+      //              double(S(1, 1).imag()));
         }
       }
     }
+    // std::cout << "after all iterations\n";
+    //       printf("S11: %g + i%g\n", double(S(0, 0).real()),
+    //                double(S(0, 0).imag()));
+    //    printf("S12: %g + i%g\n", double(S(0, 1).real()),
+    //                double(S(0, 1).imag()));
+    //    printf("S21: %g + i%g\n", double(S(1, 0).real()),
+    //                double(S(1, 0).imag()));
+    //    printf("S22: %g + i%g\n", double(S(1, 1).real()),
+    //                double(S(1, 1).imag()));
     // now divide all expressions by the wavenumber
     const float_type kinv = 1. / _k;
+    // std::cout << "dividing by " << _k << " * " << kinv;
     S(0, 0) *= kinv;
     S(0, 1) *= kinv;
     S(1, 0) *= kinv;
@@ -1309,6 +820,9 @@ public:
       const float_type theta_out_radians,
       const float_type phi_out_radians) const {
 
+    // std::cout << "alpha = " << alpha_radians << " beta = " << beta_radians
+    // << " theta = " << theta_in_radians << " " << theta_out_radians
+    // << " phi = " << phi_in_radians << " " << phi_out_radians << "\n";
     // Mishchenko includes some (buggy) corrections for small angles
     // might be worth looking into this in a later stage...
 
@@ -1462,7 +976,15 @@ public:
         costheta_p_in, sintheta_p_in, sintheta_p_in_inv, cosphi_p_in,
         sinphi_p_in, costheta_p_out, sintheta_p_out, sintheta_p_out_inv,
         cosphi_p_out, sinphi_p_out);
-
+  // std::cout << "after internal:\n";
+  //         printf("S11: %g + i%g\n", double(S(0, 0).real()),
+  //                  double(S(0, 0).imag()));
+  //      printf("S12: %g + i%g\n", double(S(0, 1).real()),
+  //                  double(S(0, 1).imag()));
+  //      printf("S21: %g + i%g\n", double(S(1, 0).real()),
+  //                  double(S(1, 0).imag()));
+  //      printf("S22: %g + i%g\n", double(S(1, 1).real()),
+  //                  double(S(1, 1).imag()));
     // perform the double 2x2 matrix product to convert S^P to S^L
     const std::complex<float_type> cS11 =
         S(0, 0) * R_in(0, 0) + S(0, 1) * R_in(1, 0);
@@ -1472,12 +994,29 @@ public:
         S(1, 0) * R_in(0, 0) + S(1, 1) * R_in(1, 0);
     const std::complex<float_type> cS22 =
         S(1, 0) * R_in(0, 1) + S(1, 1) * R_in(1, 1);
-
+  // std::cout << "after R_in:\n";
+  //         printf("S11: %g + i%g\n", double(S(0, 0).real()),
+  //                  double(S(0, 0).imag()));
+  //      printf("S12: %g + i%g\n", double(S(0, 1).real()),
+  //                  double(S(0, 1).imag()));
+  //      printf("S21: %g + i%g\n", double(S(1, 0).real()),
+  //                  double(S(1, 0).imag()));
+  //      printf("S22: %g + i%g\n", double(S(1, 1).real()),
+  //                  double(S(1, 1).imag()));
     S(0, 0) = R_out(0, 0) * cS11 + R_out(0, 1) * cS21;
     S(0, 1) = R_out(0, 0) * cS12 + R_out(0, 1) * cS22;
     S(1, 0) = R_out(1, 0) * cS11 + R_out(1, 1) * cS21;
     S(1, 1) = R_out(1, 0) * cS12 + R_out(1, 1) * cS22;
 
+  // std::cout << "almost calculated S:\n";
+  //         printf("S11: %g + i%g\n", double(S(0, 0).real()),
+  //                  double(S(0, 0).imag()));
+  //      printf("S12: %g + i%g\n", double(S(0, 1).real()),
+  //                  double(S(0, 1).imag()));
+  //      printf("S21: %g + i%g\n", double(S(1, 0).real()),
+  //                  double(S(1, 0).imag()));
+  //      printf("S22: %g + i%g\n", double(S(1, 1).real()),
+  //                  double(S(1, 1).imag()));
     return S;
   }
 
@@ -1898,14 +1437,14 @@ public:
         alpha_radians, beta_radians, theta_in_radians, phi_in_radians,
         theta_out_radians, phi_out_radians);
 
-    //    ctm_warning("S11: %g + i%g", double(S(0, 0).real()),
-    //                double(S(0, 0).imag()));
-    //    ctm_warning("S12: %g + i%g", double(S(0, 1).real()),
-    //                double(S(0, 1).imag()));
-    //    ctm_warning("S21: %g + i%g", double(S(1, 0).real()),
-    //                double(S(1, 0).imag()));
-    //    ctm_warning("S22: %g + i%g", double(S(1, 1).real()),
-    //                double(S(1, 1).imag()));
+      //  ctm_warning("S11: %g + i%g", double(S(0, 0).real()),
+      //              double(S(0, 0).imag()));
+      //  ctm_warning("S12: %g + i%g", double(S(0, 1).real()),
+      //              double(S(0, 1).imag()));
+      //  ctm_warning("S21: %g + i%g", double(S(1, 0).real()),
+      //              double(S(1, 0).imag()));
+      //  ctm_warning("S22: %g + i%g", double(S(1, 1).real()),
+      //              double(S(1, 1).imag()));
 
     const std::complex<float_type> icompl(0., 1.);
 
@@ -2284,6 +1823,682 @@ public:
     }
 
     return 0.5 * result;
+  }
+};
+
+class MishchenkoTMatrix : public TMatrix {
+private:
+  /*! @brief Number of Gauss-Legendre quadrature points, @f$n_{GL}@f$. */
+  const uint_fast32_t _ngauss;
+
+  /*! @brief Precomputed factors @f$\sqrt{\frac{2n+1}{n(n+1)}}@f$ (array of size
+   *  @f$n_{max}@f$). */
+  std::vector<float_type> _dd;
+
+  /*! @brief Precomputed factors
+   *  @f$\frac{1}{2}\sqrt{\frac{(2n+1)(2n'+1)}{n(n+1)n'(n'+1)}}@f$
+   *  (@f$n_{max}\times{}n_{max}@f$ matrix). */
+  Matrix<float_type> _ann;
+
+  /*! @brief Precomputed factors @f$\cos(\theta{})@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<float_type> _costheta;
+
+  /*! @brief Precomputed factors @f$\frac{1}{\sin(\theta{})}@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<float_type> _sinthetainv;
+
+  /*! @brief Precomputed factors @f$\frac{1}{\sin^2(\theta{})}@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<float_type> _sintheta2inv;
+
+  /*! @brief Gauss-Legendre weights for the roots @f$\cos(\theta{})@f$ (array of
+   *  size @f$2n_{GL}@f$). */
+  std::vector<float_type> _weights;
+
+  /*! @brief Precomputed factors @f$r^2(\theta{})@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<float_type> _r2;
+
+  /*! @brief Precomputed factors @f$\frac{1}{r(\theta{})}\frac{d}{d\theta{}}
+   *  r(\theta{})@f$  (array of size @f$2n_{GL}@f$). */
+  std::vector<float_type> _dr_over_r;
+
+  /*! @brief Precomputed factors @f$kr@f$ (array of size @f$2n_{GL}@f$). */
+  std::vector<float_type> _kr;
+
+  /*! @brief Precomputed factors @f$\frac{1}{kr}@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<float_type> _krinv;
+
+  /*! @brief Precomputed factors @f$km_rr@f$ (array of size @f$2n_{GL}@f$). */
+  std::vector<std::complex<float_type>> _krmr;
+
+  /*! @brief Precomputed factors @f$\frac{1}{km_rr}@f$ (array of size
+   *  @f$2n_{GL}@f$). */
+  std::vector<std::complex<float_type>> _krmrinv;
+
+  /*! @brief Wavenumber squared, @f$k^2@f$. */
+  const float_type _k2;
+
+  /*! @brief Wavenumber squared times refractive index, @f$m_rk^2@f$. */
+  const std::complex<float_type> _k2mr;
+
+  /*! @brief Bessel functions @f$j_n(kr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
+   *  matrix). */
+  Matrix<float_type> _jkr;
+
+  /*! @brief Bessel functions @f$y_n(kr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
+   *  matrix). */
+  Matrix<float_type> _ykr;
+
+  /*! @brief Bessel function derivatives @f$\frac{[krj_n(kr)]'}{kr}@f$
+   *  (@f$2n_{GL}\times{}n_{max}@f$ matrix). */
+  Matrix<float_type> _djkr;
+
+  /*! @brief Bessel function derivatives @f$\frac{[kry_n(kr)]'}{kr}@f$
+   *  (@f$2n_{GL}\times{}n_{max}@f$ matrix). */
+  Matrix<float_type> _dykr;
+
+  /*! @brief Bessel functions @f$j_n(km_rr)@f$ (@f$2n_{GL}\times{}n_{max}@f$
+   *  matrix). */
+  Matrix<std::complex<float_type>> _jkrmr;
+
+  /*! @brief Bessel function derivatives
+   *  @f$\frac{[km_rrj(km_rr)]'}{km_rr}@f$ (@f$2n_{GL}\times{}n_{max}@f$
+   *  matrix). */
+  Matrix<std::complex<float_type>> _djkrmr;
+
+public:
+  /**
+   * @brief T-matrix.
+   *
+   * @param wavelength Wavelength of incident radiation, @f$\lambda{}@f$.
+   * @param refractive_index Refractive index of the material, @f$m_r@f$.
+   * @param R_V Equal volume sphere radius, @f$R_V@f$.
+   * @param axis_ratio Axis ratio of the spheroid, @f$d = \frac{a}{b}@f$.
+   * @param nmax Maximum order of spherical basis, @f$n_{max}@f$.
+   * @param ngauss Number of Gauss-Legendre quadrature points, @f$n_{GL}@f$.
+   */
+  inline MishchenkoTMatrix(const float_type wavelength,
+                 const std::complex<float_type> refractive_index,
+                 const float_type R_V, const float_type axis_ratio,
+                 const uint_fast32_t nmax, const uint_fast32_t ngauss)
+      : TMatrix(nmax, wavelength), _ngauss(ngauss), _dd(nmax, float_type(0.)),
+        _ann(nmax, nmax), _costheta(2 * ngauss, float_type(0.)),
+        _sinthetainv(2 * ngauss, float_type(0.)),
+        _sintheta2inv(2 * ngauss, float_type(0.)),
+        _weights(2 * ngauss, float_type(0.)), _r2(2 * ngauss, float_type(0.)),
+        _dr_over_r(2 * ngauss, float_type(0.)), _kr(2 * ngauss, float_type(0.)),
+        _krinv(2 * ngauss, float_type(0.)), _krmr(2 * ngauss, float_type(0.)),
+        _krmrinv(2 * ngauss, float_type(0.)), 
+        _k2(_k * _k), _k2mr(refractive_index * _k2), _jkr(2 * ngauss, nmax),
+        _ykr(2 * ngauss, nmax), _djkr(2 * ngauss, nmax),
+        _dykr(2 * ngauss, nmax), _jkrmr(2 * ngauss, nmax),
+        _djkrmr(2 * ngauss, nmax) {
+
+    std::cout << "made with k " << _k << " " << _k2 << " wav = " << wavelength << "\n"; 
+    _T.reserve(_nmax + 1);
+    for (uint_fast32_t m = 0; m < _nmax + 1; ++m) {
+      const uint_fast32_t nm = _nmax + 1 - m;
+      _T.push_back(Matrix<std::complex<float_type>>(2 * nm, 2 * nm));
+    }
+
+    for (uint_fast32_t ni = 0; ni < nmax; ++ni) {
+      const float_type nn((ni + 2.) * (ni + 1.));
+      const float_type d = sqrt((2. * (ni + 1.) + 1.) / nn);
+      _dd[ni] = d;
+      for (uint_fast32_t nj = 0; nj < ni + 1; ++nj) {
+        const float_type ddd = 0.5 * d * _dd[nj];
+        _ann(ni, nj) = ddd;
+        _ann(nj, ni) = ddd;
+      }
+    }
+    SpecialFunctions::get_gauss_legendre_points_and_weights(
+        2 * ngauss, _costheta, _weights);
+    for (uint_fast32_t ig = 0; ig < ngauss; ++ig) {
+      const float_type this_sintheta2inv =
+          1. / ((1. - _costheta[ig]) * (1. + _costheta[ig]));
+      _sintheta2inv[ig] = this_sintheta2inv;
+      _sintheta2inv[2 * ngauss - ig - 1] = this_sintheta2inv;
+      const float_type this_sinthetainv = sqrt(this_sintheta2inv);
+      _sinthetainv[ig] = this_sinthetainv;
+      _sinthetainv[2 * ngauss - ig - 1] = this_sinthetainv;
+    }
+    SpecialFunctions::get_r_dr_spheroid(&_costheta[0], _costheta.size(),
+                                        axis_ratio, &_r2[0], &_dr_over_r[0]);
+    const std::complex<float_type> mrinv = float_type(1.) / refractive_index;
+    for (uint_fast32_t i = 0; i < 2 * ngauss; ++i) {
+      _r2[i] *= R_V * R_V;
+      const float_type r = sqrt(_r2[i]);
+      _kr[i] = _k * r;
+      _krmr[i] = refractive_index * _kr[i];
+      _krinv[i] = 1. / _kr[i];
+      _krmrinv[i] = mrinv * _krinv[i];
+    }
+    for (uint_fast32_t ig = 0; ig < 2 * ngauss; ++ig) {
+      SpecialFunctions::spherical_j_jdj_array(nmax, _kr[ig], _jkr.get_row(ig),
+                                              _djkr.get_row(ig));
+      SpecialFunctions::spherical_y_ydy_array(nmax, _kr[ig], _ykr.get_row(ig),
+                                              _dykr.get_row(ig));
+      SpecialFunctions::spherical_j_jdj_array(
+          nmax, _krmr[ig], _jkrmr.get_row(ig), _djkrmr.get_row(ig));
+    }
+
+    const uint_fast32_t nmax2 = 2 * nmax;
+
+    Matrix<float_type> wigner_d(2 * ngauss, nmax);
+    Matrix<float_type> dwigner_d(2 * ngauss, nmax);
+    std::vector<float_type> wr2(ngauss);
+    Matrix<std::complex<float_type>> J12(nmax, nmax);
+    Matrix<std::complex<float_type>> J21(nmax, nmax);
+    Matrix<std::complex<float_type>> RgJ12(nmax, nmax);
+    Matrix<std::complex<float_type>> RgJ21(nmax, nmax);
+    Matrix<std::complex<float_type>> Q(nmax2, nmax2);
+    Matrix<std::complex<float_type>> RgQ(nmax2, nmax2);
+
+    for (uint_fast32_t ig = 1; ig < ngauss + 1; ++ig) {
+      const uint_fast32_t i1 = ngauss + ig;
+      const uint_fast32_t i2 = ngauss - ig + 1;
+      std::vector<float_type> dv1(nmax), dv2(nmax);
+      SpecialFunctions::wigner_dn_0m(_costheta[i1 - 1], nmax, 0, &dv1[0],
+                                     &dv2[0]);
+      int_fast8_t si = 1;
+      for (uint_fast32_t n = 0; n < nmax; ++n) {
+        si = -si;
+        wigner_d(i1 - 1, n) = dv1[n];
+        wigner_d(i2 - 1, n) = si * dv1[n];
+        dwigner_d(i1 - 1, n) = dv2[n];
+        dwigner_d(i2 - 1, n) = -si * dv2[n];
+      }
+    }
+    for (uint_fast32_t ig = 0; ig < ngauss; ++ig) {
+      wr2[ig] = _weights[ig] * _r2[ig];
+    }
+    for (uint_fast32_t n1 = 1; n1 < nmax + 1; ++n1) {
+      // n1 * (n1 + 1)
+      const float_type n1n1p1 = n1 * (n1 + 1.);
+      for (uint_fast32_t n2 = 1; n2 < nmax + 1; ++n2) {
+        // n2 * (n2 + 1)
+        const float_type n2n2p1 = n2 * (n2 + 1.);
+
+        std::complex<float_type> this_J12, this_J21, this_RgJ12, this_RgJ21;
+        // filter out half the components because of symmetry
+        if ((n1 + n2) % 2 == 0) {
+          for (uint_fast32_t ig = 1; ig < ngauss + 1; ++ig) {
+            const float_type wigner_n1 = wigner_d(ig - 1, n1 - 1);
+            const float_type dwigner_n1 = dwigner_d(ig - 1, n1 - 1);
+            const float_type wigner_n2 = wigner_d(ig - 1, n2 - 1);
+            const float_type dwigner_n2 = dwigner_d(ig - 1, n2 - 1);
+
+            const float_type wn1dwn2 = wigner_n1 * dwigner_n2;
+            const float_type dwn1wn2 = dwigner_n1 * wigner_n2;
+            const float_type dwn1dwn2 = dwigner_n1 * dwigner_n2;
+
+            const float_type jkrn1 = _jkr(ig - 1, n1 - 1);
+            const float_type ykrn1 = _ykr(ig - 1, n1 - 1);
+            // spherical Hankel function of the first kind
+            const std::complex<float_type> hkrn1(jkrn1, ykrn1);
+            const float_type djkrn1 = _djkr(ig - 1, n1 - 1);
+            const float_type dykrn1 = _dykr(ig - 1, n1 - 1);
+            const std::complex<float_type> dhkrn1(djkrn1, dykrn1);
+            const std::complex<float_type> jkrmrn2 = _jkrmr(ig - 1, n2 - 1);
+            const std::complex<float_type> djkrmrn2 = _djkrmr(ig - 1, n2 - 1);
+
+            const std::complex<float_type> c1 = jkrmrn2 * jkrn1;
+            const std::complex<float_type> b1 = jkrmrn2 * hkrn1;
+
+            const std::complex<float_type> c2 = jkrmrn2 * djkrn1;
+            const std::complex<float_type> b2 = jkrmrn2 * dhkrn1;
+
+            const float_type krinvi = _krinv[ig - 1];
+            const std::complex<float_type> c3 = krinvi * c1;
+            const std::complex<float_type> b3 = krinvi * b1;
+
+            const std::complex<float_type> c4 = jkrn1 * djkrmrn2;
+            const std::complex<float_type> b4 = hkrn1 * djkrmrn2;
+
+            const std::complex<float_type> krmrinvi = _krmrinv[ig - 1];
+            const std::complex<float_type> c5 = c1 * krmrinvi;
+            const std::complex<float_type> b5 = b1 * krmrinvi;
+
+            const float_type wr2i = wr2[ig - 1];
+            const float_type dr_over_ri = _dr_over_r[ig - 1];
+
+            const float_type f1 = wr2i * dwn1dwn2;
+            const float_type f2 = wr2i * dr_over_ri * n1n1p1 * wn1dwn2;
+            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn2(krmr) *
+            //    ([kr*hn1(kr)]'/kr)
+            // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
+            //    jn2(krmr) * hn1(kr) / kr
+            this_J12 += f1 * b2 + f2 * b3;
+            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn2(krmr) *
+            //    ([kr*jn1(kr)]'/kr)
+            // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
+            //    jn2(krmr) * jn1(kr) / kr
+            this_RgJ12 += f1 * c2 + f2 * c3;
+
+            const float_type f3 = wr2i * dr_over_ri * n2n2p1 * dwn1wn2;
+            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * hn1(kr) *
+            //    ([krmr*jn2(krmr)]'/krmr)
+            // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
+            //    jn2(krmr) * hn1(kr) / krmr
+            this_J21 += f1 * b4 + f3 * b5;
+            // r^2 * ddn1_0m/dtheta * ddn2_0m/dtheta * jn1(kr) *
+            //    ([krmr*jn2(krmr)]'/krmr)
+            // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
+            //    jn2(krmr) * jn1(kr) / krmr
+            this_RgJ21 += f1 * c4 + f3 * c5;
+          }
+          // prefactor sqrt{(2n1+1)*(2n2+1)/[n1*(n1+1)*n2*(n2+1)]}
+          const float_type an12 = 2. * _ann(n1 - 1, n2 - 1);
+          J12(n1 - 1, n2 - 1) = an12 * this_J12;
+          J21(n1 - 1, n2 - 1) = an12 * this_J21;
+          RgJ12(n1 - 1, n2 - 1) = an12 * this_RgJ12;
+          RgJ21(n1 - 1, n2 - 1) = an12 * this_RgJ21;
+        }
+      }
+    }
+    for (uint_fast32_t n1 = 1; n1 < nmax + 1; ++n1) {
+      const uint_fast32_t k1 = n1;
+      const uint_fast32_t kk1 = k1 + nmax;
+      for (uint_fast32_t n2 = 1; n2 < nmax + 1; ++n2) {
+        const uint_fast32_t k2 = n2;
+        const uint_fast32_t kk2 = k2 + nmax;
+
+        const std::complex<float_type> icompl(0., 1.);
+        // no idea why we multiply with i: completely unnecessary...
+        // (code also works if you leave out the i factor)
+        // sign differences are due to a sign difference between the
+        // implementation and documentation
+        const std::complex<float_type> this_J12 = -icompl * J12(n1 - 1, n2 - 1);
+        const std::complex<float_type> this_RgJ12 =
+            -icompl * RgJ12(n1 - 1, n2 - 1);
+        const std::complex<float_type> this_J21 = icompl * J21(n1 - 1, n2 - 1);
+        const std::complex<float_type> this_RgJ21 =
+            icompl * RgJ21(n1 - 1, n2 - 1);
+
+        Q(k1 - 1, k2 - 1) = _k2mr * this_J21 + _k2 * this_J12;
+        RgQ(k1 - 1, k2 - 1) = _k2mr * this_RgJ21 + _k2 * this_RgJ12;
+
+        Q(kk1 - 1, kk2 - 1) = _k2mr * this_J12 + _k2 * this_J21;
+        RgQ(kk1 - 1, kk2 - 1) = _k2mr * this_RgJ12 + _k2 * this_RgJ21;
+      }
+    }
+
+    // func_TT
+    Q.plu_inverse(nmax2);
+
+    for (uint_fast32_t i = 0; i < nmax; ++i) {
+      for (uint_fast32_t j = 0; j < nmax; ++j) {
+        for (uint_fast32_t k = 0; k < nmax2; ++k) {
+          _T[0](i, j) -= RgQ(i, k) * Q(k, j);
+          _T[0](_nmax + i, j) -= RgQ(nmax + i, k) * Q(k, j);
+          _T[0](i, _nmax + j) -= RgQ(i, k) * Q(k, nmax + j);
+          _T[0](_nmax + i, _nmax + j) -= RgQ(nmax + i, k) * Q(k, nmax + j);
+        }
+      }
+    }
+
+            std::cout << "spherical tmatrix:\n";
+        for (uint_fast32_t i = 0; i < 2 * nmax; ++i) {
+            for (uint_fast32_t j = 0; j < 2 * nmax; ++j) {
+                std::cout << _T[0](i,j) << " ";
+            }
+          std::cout << "\n";
+        }
+  }
+
+  /**
+   * @brief Compute the missing elements of the T-matrix.
+   */
+  inline virtual void compute_additional_elements() final {
+
+    for (uint_fast32_t m = 1; m < _nmax + 1; ++m) {
+
+      const float_type m2 = m * m;
+      const uint_fast32_t nm = _nmax + 1 - m;
+      const uint_fast32_t nm2 = 2 * nm;
+
+      Matrix<float_type> wigner_d(2 * _ngauss, _nmax);
+      Matrix<float_type> dwigner_d(2 * _ngauss, _nmax);
+      std::vector<float_type> wr2(_ngauss);
+      Matrix<std::complex<float_type>> J11(_nmax, _nmax);
+      Matrix<std::complex<float_type>> J12(_nmax, _nmax);
+      Matrix<std::complex<float_type>> J21(_nmax, _nmax);
+      Matrix<std::complex<float_type>> J22(_nmax, _nmax);
+      Matrix<std::complex<float_type>> RgJ11(_nmax, _nmax);
+      Matrix<std::complex<float_type>> RgJ12(_nmax, _nmax);
+      Matrix<std::complex<float_type>> RgJ21(_nmax, _nmax);
+      Matrix<std::complex<float_type>> RgJ22(_nmax, _nmax);
+      Matrix<std::complex<float_type>> Q(nm2, nm2);
+      Matrix<std::complex<float_type>> RgQ(nm2, nm2);
+      std::vector<float_type> ds(_ngauss);
+      std::vector<float_type> dss(_ngauss);
+
+      for (uint_fast32_t ig = 1; ig < _ngauss + 1; ++ig) {
+        const uint_fast32_t i1 = _ngauss + ig;
+        const uint_fast32_t i2 = _ngauss + 1 - ig;
+        std::vector<float_type> dv1(_nmax), dv2(_nmax);
+        SpecialFunctions::wigner_dn_0m(_costheta[i1 - 1], _nmax, m, &dv1[0],
+                                       &dv2[0]);
+        int_fast8_t sign = 1;
+        for (uint_fast32_t n = 0; n < _nmax; ++n) {
+          sign = -sign;
+          wigner_d(i1 - 1, n) = dv1[n];
+          wigner_d(i2 - 1, n) = sign * dv1[n];
+          dwigner_d(i1 - 1, n) = dv2[n];
+          dwigner_d(i2 - 1, n) = -sign * dv2[n];
+        }
+      }
+      for (uint_fast32_t ig = 0; ig < _ngauss; ++ig) {
+        // move to class member
+        wr2[ig] = _weights[ig] * _r2[ig];
+        ds[ig] = _sinthetainv[ig] * m * wr2[ig];
+        dss[ig] = _sintheta2inv[ig] * m2;
+      }
+      for (uint_fast32_t n1 = m; n1 < _nmax + 1; ++n1) {
+        // n1 * (n1 + 1)
+        const float_type n1n1p1 = n1 * (n1 + 1.);
+        for (uint_fast32_t n2 = m; n2 < _nmax + 1; ++n2) {
+          // n2 * (n2 + 1)
+          const float_type n2n2p1 = n2 * (n2 + 1.);
+
+          std::complex<float_type> this_J11, this_J12, this_J21, this_J22,
+              this_RgJ11, this_RgJ12, this_RgJ21, this_RgJ22;
+          const int_fast8_t si = ((n1 + n2) % 2 == 0) ? 1 : -1;
+          for (uint_fast32_t ig = 0; ig < _ngauss; ++ig) {
+            const float_type wigner_n1 = wigner_d(ig, n1 - 1);
+            const float_type dwigner_n1 = dwigner_d(ig, n1 - 1);
+            const float_type wigner_n2 = wigner_d(ig, n2 - 1);
+            const float_type dwigner_n2 = dwigner_d(ig, n2 - 1);
+
+            const float_type wn1wn2 = wigner_n1 * wigner_n2;
+            const float_type wn1dwn2 = wigner_n1 * dwigner_n2;
+            const float_type dwn1wn2 = dwigner_n1 * wigner_n2;
+
+            const float_type jkrn1 = _jkr(ig, n1 - 1);
+            const float_type ykrn1 = _ykr(ig, n1 - 1);
+            // spherical Hankel function of the first kind
+            const std::complex<float_type> hkrn1(jkrn1, ykrn1);
+            const float_type djkrn1 = _djkr(ig, n1 - 1);
+            const float_type dykrn1 = _dykr(ig, n1 - 1);
+            const std::complex<float_type> dhkrn1(djkrn1, dykrn1);
+            const std::complex<float_type> jkrmrn2 = _jkrmr(ig, n2 - 1);
+            const std::complex<float_type> djkrmrn2 = _djkrmr(ig, n2 - 1);
+
+            const std::complex<float_type> c1 = jkrmrn2 * jkrn1;
+            const std::complex<float_type> b1 = jkrmrn2 * hkrn1;
+
+            const std::complex<float_type> c2 = jkrmrn2 * djkrn1;
+            const std::complex<float_type> b2 = jkrmrn2 * dhkrn1;
+
+            const float_type krinvi = _krinv[ig];
+
+            const std::complex<float_type> c4 = djkrmrn2 * jkrn1;
+            const std::complex<float_type> b4 = djkrmrn2 * hkrn1;
+
+            const std::complex<float_type> krmrinvi = _krmrinv[ig];
+
+            const float_type dr_over_ri = _dr_over_r[ig];
+
+            if (si < 0) {
+              const float_type dsi = ds[ig];
+
+              const std::complex<float_type> c6 = djkrmrn2 * djkrn1;
+              const std::complex<float_type> b6 = djkrmrn2 * dhkrn1;
+
+              const std::complex<float_type> c7 = c4 * krinvi;
+              const std::complex<float_type> b7 = b4 * krinvi;
+
+              const std::complex<float_type> c8 = c2 * krmrinvi;
+              const std::complex<float_type> b8 = b2 * krmrinvi;
+
+              const float_type e1 = dsi * (wn1dwn2 + dwn1wn2);
+              // (m / sintheta) * jn2(krmr) * hn1(kr) *
+              // (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
+              this_J11 += e1 * b1;
+              // (m / sintheta) * jn2(krmr) * jn1(kr) *
+              // (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
+              this_RgJ11 += e1 * c1;
+
+              const float_type factor = dsi * dr_over_ri * wn1wn2;
+              const float_type e2 = factor * n1n1p1;
+              const float_type e3 = factor * n2n2p1;
+              // (m / sintheta) * ([krmr*kn2(krmr)]'/krmr) * ([kr*hn1(kr)]'/kr)
+              //    * (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
+              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n1 * (n1 + 1)
+              //    * ([krmr*jn2(krmr)]'/krmr) * hn1(kr) / kr
+              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n2 * (n2 + 1)
+              //    * jn2(krmr) * ([kr*hn1(kr]'/kr) / krmr
+              this_J22 += e1 * b6 + e2 * b7 + e3 * b8;
+              // (m / sintheta) * ([krmr*kn2(krmr)]'/krmr) * ([kr*jn1(kr)]'/kr)
+              //    * (dn1_0m * ddn2_0m/dtheta + ddn1_0m/dtheta * dn2_0m)
+              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n1 * (n1 + 1)
+              //    * ([krmr*jn2(krmr)]'/krmr) * jn1(kr) / kr
+              // + (m / sintheta) * dr/rdtheta * dn1_0m * dn2_0m * n2 * (n2 + 1)
+              //    * jn2(krmr) * ([kr*jn1(kr]'/kr) / krmr
+              this_RgJ22 += e1 * c6 + e2 * c7 + e3 * c8;
+            } else {
+              const float_type wr2i = wr2[ig];
+              const std::complex<float_type> c3 = krinvi * c1;
+              const std::complex<float_type> b3 = krinvi * b1;
+              const std::complex<float_type> c5 = c1 * krmrinvi;
+              const std::complex<float_type> b5 = b1 * krmrinvi;
+
+              const float_type f1 =
+                  wr2i * (wn1wn2 * dss[ig] + dwigner_n1 * dwigner_n2);
+              const float_type f2 = wr2i * dr_over_ri * n1n1p1 * wn1dwn2;
+              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
+              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn2(krmr) *
+              //    ([kr*hn1(kr)]'/kr)
+              // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
+              //    jn2(krmr) * hn1(kr) / kr
+              this_J12 += f1 * b2 + f2 * b3;
+              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
+              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn2(krmr) *
+              //    ([kr*jn1(kr)]'/kr)
+              // + r^2 * dr/rdtheta * n1 * (n1 + 1) * dn1_0m * ddn1_0m/dtheta *
+              //    jn2(krmr) * jn1(kr) / kr
+              this_RgJ12 += f1 * c2 + f2 * c3;
+
+              const float_type f3 = wr2i * dr_over_ri * n2n2p1 * dwn1wn2;
+              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
+              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * hn1(kr) *
+              //    ([krmr*jn2(krmr)]'/krmr)
+              // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
+              //    jn2(krmr) * hn1(kr) / krmr
+              this_J21 += f1 * b4 + f3 * b5;
+              // r^2 * (m^2 / sintheta * dn1_0m * dn2_0m +
+              //        ddn1_0m/dtheta * ddn2_0m/dtheta) * jn1(kr) *
+              //    ([krmr*jn2(krmr)]'/krmr)
+              // + r^2 * dr/rdtheta * n2 * (n2 + 1) * ddn1_0m/dtheta * dn2_0m *
+              //    jn2(krmr) * jn1(kr) / krmr
+              this_RgJ21 += f1 * c4 + f3 * c5;
+            }
+          }
+          // prefactor sqrt{(2n1+1)*(2n2+1)/[n1*(n1+1)*n2*(n2+1)]}
+          const float_type an12 = 2. * _ann(n1 - 1, n2 - 1);
+          J11(n1 - 1, n2 - 1) = this_J11 * an12;
+          J12(n1 - 1, n2 - 1) = this_J12 * an12;
+          J21(n1 - 1, n2 - 1) = this_J21 * an12;
+          J22(n1 - 1, n2 - 1) = this_J22 * an12;
+          RgJ11(n1 - 1, n2 - 1) = this_RgJ11 * an12;
+          RgJ12(n1 - 1, n2 - 1) = this_RgJ12 * an12;
+          RgJ21(n1 - 1, n2 - 1) = this_RgJ21 * an12;
+          RgJ22(n1 - 1, n2 - 1) = this_RgJ22 * an12;
+        }
+      }
+      for (uint_fast32_t n1 = m; n1 < _nmax + 1; ++n1) {
+        const uint_fast32_t k1 = n1 + 1 - m;
+        const uint_fast32_t kk1 = k1 + nm;
+        for (uint_fast32_t n2 = m; n2 < _nmax + 1; ++n2) {
+          const uint_fast32_t k2 = n2 + 1 - m;
+          const uint_fast32_t kk2 = k2 + nm;
+
+          const std::complex<float_type> icompl(0., 1.);
+          // a factor -i is missing in J11 and J22
+          // to compensate for this, we multiply J12 and J21 with -i too
+          // we then multiply J11 and J22 with -1, so that it is wrong again?
+          // not sure how to make sense of this...
+          const std::complex<float_type> this_J11 = -J11(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_RgJ11 = -RgJ11(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_J12 =
+              -icompl * J12(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_RgJ12 =
+              -icompl * RgJ12(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_J21 =
+              icompl * J21(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_RgJ21 =
+              icompl * RgJ21(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_J22 = -J22(n1 - 1, n2 - 1);
+          const std::complex<float_type> this_RgJ22 = -RgJ22(n1 - 1, n2 - 1);
+
+          Q(k1 - 1, k2 - 1) = _k2mr * this_J21 + _k2 * this_J12;
+          RgQ(k1 - 1, k2 - 1) = _k2mr * this_RgJ21 + _k2 * this_RgJ12;
+
+          Q(k1 - 1, kk2 - 1) = _k2mr * this_J11 + _k2 * this_J22;
+          RgQ(k1 - 1, kk2 - 1) = _k2mr * this_RgJ11 + _k2 * this_RgJ22;
+
+          Q(kk1 - 1, k2 - 1) = _k2mr * this_J22 + _k2 * this_J11;
+          RgQ(kk1 - 1, k2 - 1) = _k2mr * this_RgJ22 + _k2 * this_RgJ11;
+
+          Q(kk1 - 1, kk2 - 1) = _k2mr * this_J12 + _k2 * this_J21;
+          RgQ(kk1 - 1, kk2 - 1) = _k2mr * this_RgJ12 + _k2 * this_RgJ21;
+        }
+      }
+
+      Q.plu_inverse(nm2);
+
+      for (uint_fast32_t i = 0; i < nm; ++i) {
+        for (uint_fast32_t j = 0; j < nm; ++j) {
+          for (uint_fast32_t k = 0; k < nm2; ++k) {
+            _T[m](i, j) -= RgQ(i, k) * Q(k, j);
+            _T[m](nm + i, j) -= RgQ(nm + i, k) * Q(k, j);
+            _T[m](i, nm + j) -= RgQ(i, k) * Q(k, nm + j);
+            _T[m](nm + i, nm + j) -= RgQ(nm + i, k) * Q(k, nm + j);
+          }
+        }
+      }
+                  std::cout << "spherical tmatrix: m = " << m << "\n";
+        for (uint_fast32_t i = 0; i < 2 * nm; ++i) {
+            for (uint_fast32_t j = 0; j < 2 * nm; ++j) {
+                std::cout << _T[m](i,j) << " ";
+            }
+          std::cout << "\n";
+        }
+    }
+  }
+};
+
+class SpheroidalTMatrix : public TMatrix {
+private:
+  uint_fast32_t _nol;
+  std::vector<float_type> _ab, _rv;
+  float_type _lambda;
+    std::vector<std::complex<float_type>> _ri;
+
+    void get_tmatrix_layer(const uint_fast32_t nmax, const uint_fast32_t mm, const uint_fast32_t ind) {
+        float_type z = _lambda;
+        fortran_float_type lambda(z);
+        std::vector<fortran_float_type> ab, rv;
+        std::vector<fortran_complex_type> ri;
+        // fortran_complex_type ri(fortran_float_type{_ri[0].real()}, fortran_float_type{_ri[0].imag()});
+        fortran_complex_type* res = new fortran_complex_type[16*nmax*nmax];
+        int32_t lnum = nmax;
+        int32_t m = mm;
+        int32_t nol = _nol;
+        for (size_t i = 0; i < _ab.size(); ++i) {
+          ab.push_back(fortran_float_type{_ab[i]});
+          rv.push_back(fortran_float_type{_rv[i]});
+          ri.push_back(fortran_complex_type{fortran_float_type{_ri[i].real()}, fortran_float_type{_ri[i].imag()}});
+        }
+
+        std::cout << "ri = " << ri[0] << " _ri = " << _ri[0] << " lambda = " << lambda << "\n";
+
+        __tmatrix_MOD_get_spheroidal_tmatrix(&nol, ab.data(), rv.data(), &lambda, &lnum, ri.data(), &m, res);
+        std::cout << "just got result\n";
+        for (uint_fast32_t i = 0; i < 2 * nmax; ++i) {
+          std::cout << res[i] << " ";
+        }
+        std::cout << "\n";
+        // uint_fast32_t start = 0;
+        // if (mm == 0) {
+        //   start = 1;
+        // }
+        for (uint_fast32_t i = 0; i < 2 * nmax; ++i) {
+            for (uint_fast32_t j = 0; j < 2 * nmax; ++j) {
+                _T[ind](i, j) = std::complex<float_type>(
+                  res[i * 2 * nmax + j].real().convert_to<float_type>(), 
+                  res[i * 2 * nmax + j].imag().convert_to<float_type>());
+            }
+        }
+
+        std::cout << "spheroidal tmatrix: m = " << mm << "\n";
+        for (uint_fast32_t i = 0; i < 2 * nmax; ++i) {
+            for (uint_fast32_t j = 0; j < 2 * nmax; ++j) {
+                std::cout << _T[ind](i,j) << " ";
+            }
+          std::cout << "\n";
+        }
+
+        delete [] res;
+    }
+
+
+public:
+  /**
+   * @brief T-matrix.
+   *
+   * @param wavelength Wavelength of incident radiation, @f$\lambda{}@f$.
+   * @param refractive_index Refractive index of the material, @f$m_r@f$.
+   * @param R_V Equal volume sphere radius, @f$R_V@f$.
+   * @param axis_ratio Axis ratio of the spheroid, @f$d = \frac{a}{b}@f$.
+   * @param nmax Maximum order of spherical basis, @f$n_{max}@f$.
+   * @param ngauss Number of Gauss-Legendre quadrature points, @f$n_{GL}@f$.
+   */
+  inline SpheroidalTMatrix(const uint_fast32_t nol, const float_type wavelength,
+                 const std::vector<std::complex<float_type>>& refractive_index,
+                 const std::vector<float_type>& R_V, const std::vector<float_type>& axis_ratio,
+                 const uint_fast32_t nmax, const uint_fast32_t ngauss)
+      : TMatrix(nmax, wavelength),
+        _nol(nol), _ab(axis_ratio), _rv(R_V),
+        _lambda(wavelength), _ri(refractive_index) {
+
+    if (_nol != _ab.size()) {
+      std::cerr << "Wrong ab size: nol = " << _nol << ", but size is " << _ab.size() << "\n";
+      exit(1);
+    }
+
+    if (_nol != _rv.size()) {
+      std::cerr << "Wrong rv size: nol = " << _nol << ", but size is " << _rv.size() << "\n";
+      exit(1);
+    }
+
+    if (_nol != _ri.size()) {
+      std::cerr << "Wrong ri size: nol = " << _nol << ", but size is " << _ri.size() << "\n";
+      exit(1);
+    }
+    _T.reserve(_nmax + 1);
+    for (uint_fast32_t m = 0; m < _nmax + 1; ++m) {
+      const uint_fast32_t nm = _nmax + 1 - m;
+      _T.push_back(Matrix<std::complex<float_type>>(2 * nm, 2 * nm));
+    }
+
+    get_tmatrix_layer(nmax, 1, 0);
+  }
+
+  /**
+   * @brief Compute the missing elements of the T-matrix.
+   */
+  inline virtual void compute_additional_elements() final {
+
+    for (uint_fast32_t m = 0; m < _nmax + 1; ++m) {
+
+      const uint_fast32_t nm = _nmax + (m == 0 ? 0 : 1) - m;
+  
+      get_tmatrix_layer(nm, m, m);
+    }
   }
 };
 

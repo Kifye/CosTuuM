@@ -31,6 +31,7 @@
 #include "OrientationDistribution.hpp"
 #include "SpecialFunctions.hpp"
 #include "TMatrix.hpp"
+#include <iostream>
 
 /**
  * @brief Class that calculates the T-matrix for a single particle.
@@ -38,6 +39,26 @@
 class TMatrixCalculator {
 
 public:
+
+  inline static TMatrix* build_tmatrix(
+    const uint_fast32_t nol, 
+    const float_type wavelength, 
+    const std::vector<std::complex<float_type>>& mr, 
+    const std::vector<float_type>& R_V, 
+    const std::vector<float_type>& axis_ratio, 
+    const uint_fast32_t nmax, 
+    const uint_fast32_t ngauss, 
+    const bool use_spheroidal) {
+      std::cerr << "rv = ";
+      for (const auto& item : R_V) {
+        std::cerr << item << " ";
+      }
+      std::cerr << "\n";
+    if (use_spheroidal) {
+        return new SpheroidalTMatrix(nol, wavelength, mr, R_V, axis_ratio, nmax, ngauss);
+      } 
+    return new MishchenkoTMatrix(wavelength, mr[0], R_V[0], axis_ratio[0], nmax, ngauss);
+  }
   /**
    * @brief Calculate the T-matrix for the particle with the given properties
    * and the given wavelength.
@@ -62,25 +83,38 @@ public:
    * transferred to the caller.
    */
   inline static TMatrix *
-  calculate_TMatrix(float_type ratio_of_radii, const float_type axis_ratio,
-                    const float_type axi, const float_type wavelength,
+  calculate_TMatrix(const uint_fast32_t nol, float_type ratio_of_radii, const std::vector<float_type>& axis_ratio,
+                    const std::vector<float_type>& axi, const float_type wavelength,
                     const uint_fast32_t maximum_order,
                     const float_type tolerance, const uint_fast32_t ndgs,
-                    const std::complex<float_type> mr,
-                    const uint_fast32_t maximum_ngauss) {
-
+                    const std::vector<std::complex<float_type>>& mr,
+                    const uint_fast32_t maximum_ngauss, bool use_spheroidal = false) {
+                      std::cerr << "axi = ";
+      for (const auto& item : axi) {
+        std::cerr << item << " ";
+      }
+      std::cerr << "\n" << "nol = " << nol << "\n";
     // make sure 'ratio_of_radii' contains the right ratio if it is not 1
     if (abs(ratio_of_radii - 1.) > 1.e-8) {
       ratio_of_radii =
           SpecialFunctions::get_equal_volume_to_equal_surface_area_sphere_ratio(
-              axis_ratio);
+              axis_ratio[0]);
     }
 
     // R_V is the equivalent sphere radius
-    const float_type R_V = ratio_of_radii * axi;
+    std::vector<float_type> R_V;
+    for (uint_fast32_t i = 0; i < axi.size(); ++i) {
+      R_V.push_back(ratio_of_radii * axi[i]);
+    } 
+
+    std::cerr << "rv0 = ";
+      for (const auto& item : R_V) {
+        std::cerr << item << " ";
+      }
+      std::cerr << "\n";
     // we need a reasonable initial guess for the order of the spherical
     // harmonics the below expression provides this guess
-    const float_type xev = 2. * M_PI * R_V / wavelength;
+    const float_type xev = 2. * M_PI * R_V[0] / wavelength;
     uint_fast32_t nmax = static_cast<uint_fast32_t>(
         std::max(float_type(4.), xev + 4.05 * cbrt(xev)));
 
@@ -105,9 +139,19 @@ public:
 
       // delete the old matrix (if it exists) and create a new one
       delete active_Tmatrix;
-      active_Tmatrix =
-          new TMatrix(wavelength, mr, R_V, axis_ratio, nmax, ngauss);
+      active_Tmatrix = build_tmatrix(nol, wavelength, mr, R_V, axis_ratio, nmax, ngauss, use_spheroidal);
       TMatrix &T = *active_Tmatrix;
+
+      for (uint_fast32_t n = 1; n < nmax + 1; ++n) {
+        // std::cout << "(" << T(0, n, 0, 0, n, 0).real() << "," << T(0, n, 0, 0, n, 0).real() << ")" << " "; T(1, n, 0, 1, n, 0).real());
+        std::cout << T(0, n, 0, 0, n, 0).real() << " ";
+      }
+      std::cout << "\n";
+
+      for (uint_fast32_t n = 1; n < nmax + 1; ++n) {
+        std::cout << T(1, n, 0, 1, n, 0).real() << " ";
+      }
+      std::cout << "\n";
 
       // calculate the scattering and extinction factors for this iteration
       float_type qsca = 0.;
@@ -123,6 +167,9 @@ public:
       dext = abs((old_qext - qext) / qext);
       old_qext = qext;
       old_qsca = qsca;
+
+      std::cout << "nmax = " << nmax << " max_order = " << maximum_order << "\n";
+      std::cout << "tolerance = " << tolerance << " dext = " << dext << " dsca = " << dsca << "\n";
 
       // some (temporary) diagnostic output
       //      ctm_warning("nmax: %" PRIuFAST32, nmax);
@@ -154,7 +201,7 @@ public:
       // delete the old matrix and create a new one
       delete active_Tmatrix;
       active_Tmatrix =
-          new TMatrix(wavelength, mr, R_V, axis_ratio, nmax, ngauss);
+          build_tmatrix(nol, wavelength, mr, R_V, axis_ratio, nmax, ngauss, use_spheroidal);
       TMatrix &T = *active_Tmatrix;
 
       // calculate the scattering and extinction factors
